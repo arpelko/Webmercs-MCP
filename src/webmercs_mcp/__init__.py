@@ -1,0 +1,1 @@
+"""Frendy Webmercs MCP server."""
