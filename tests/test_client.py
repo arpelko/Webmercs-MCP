@@ -11,7 +11,8 @@ from webmercs_mcp.config import Settings
 
 def make_client(handler):
     return WebmercsClient(
-        Settings("test-user", "test-password"), transport=httpx.MockTransport(handler)
+        Settings("test-user", "test-password", project_id=42),
+        transport=httpx.MockTransport(handler),
     )
 
 
@@ -21,7 +22,7 @@ async def test_auth_scope_path_and_query_match_openapi():
     def handler(request):
         assert request.method == "GET"
         assert str(request.url).startswith("https://api.webmercs.com/admin/v1/orders?")
-        assert request.headers["X-Project-ID"] == "3"
+        assert request.headers["X-Project-ID"] == "42"
         expected = base64.b64encode(b"test-user:test-password").decode()
         assert request.headers["Authorization"] == f"Basic {expected}"
         assert request.url.params["pendingExportAny"] == "false"
@@ -95,7 +96,33 @@ async def test_timeout_and_bad_json_are_safe():
 
 def test_credentials_are_required_and_hidden_in_repr():
     with pytest.raises(ValueError):
-        Settings("", "")
-    assert "test-password" not in repr(Settings("test-user", "test-password"))
+        Settings("", "", project_id=42)
+    assert "test-password" not in repr(Settings("test-user", "test-password", project_id=42))
     with pytest.raises(ValueError):
-        Settings("user", "password", float("nan"))
+        Settings("user", "password", project_id=42, timeout_seconds=float("nan"))
+
+
+@pytest.mark.parametrize("project_id", [None, "", "invalid", "0", "-1"])
+def test_project_configuration_is_required_and_positive(monkeypatch, project_id):
+    monkeypatch.setenv("WEBMERCS_API_USERNAME", "test-user")
+    monkeypatch.setenv("WEBMERCS_API_PASSWORD", "test-password")
+    if project_id is None:
+        monkeypatch.delenv("WEBMERCS_PROJECT_ID", raising=False)
+    else:
+        monkeypatch.setenv("WEBMERCS_PROJECT_ID", project_id)
+    with pytest.raises(ValueError, match="WEBMERCS_PROJECT_ID"):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize("project_id", [42, 987])
+async def test_configured_project_reaches_request(monkeypatch, project_id):
+    monkeypatch.setenv("WEBMERCS_API_USERNAME", "test-user")
+    monkeypatch.setenv("WEBMERCS_API_PASSWORD", "test-password")
+    monkeypatch.setenv("WEBMERCS_PROJECT_ID", str(project_id))
+
+    def handler(request):
+        assert request.headers["X-Project-ID"] == str(project_id)
+        return httpx.Response(200, json={"id": 123})
+
+    client = WebmercsClient(Settings.from_env(), transport=httpx.MockTransport(handler))
+    assert await client.get("orders", 123) == {"id": 123}

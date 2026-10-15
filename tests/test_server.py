@@ -35,12 +35,14 @@ async def test_tools_over_mcp_and_openapi_contract():
         )
         operation = spec["paths"][contract_path]["get"]
         assert set(request.url.params).issubset({p["name"] for p in operation["parameters"]})
-        assert request.headers["X-Project-ID"] == "3"
+        assert request.headers["X-Project-ID"] == "42"
         assert request.method == "GET"
         return httpx.Response(200, json={"items": [], "total": 0})
 
     server = create_server(
-        WebmercsClient(Settings("test", "test"), transport=httpx.MockTransport(handler))
+        WebmercsClient(
+            Settings("test", "test", project_id=42), transport=httpx.MockTransport(handler)
+        )
     )
     cases = {
         "list_orders": {"pending_export_any": True},
@@ -57,7 +59,7 @@ async def test_tools_over_mcp_and_openapi_contract():
     }
     async with create_connected_server_and_client_session(server._mcp_server) as session:
         listed = await session.list_tools()
-        assert {t.name for t in listed.tools} == set(cases)
+        assert {t.name for t in listed.tools} == set(cases) | {"list_tool_packages"}
         for tool in listed.tools:
             assert tool.annotations.readOnlyHint is True
             assert "project_id" not in tool.inputSchema.get("properties", {})
@@ -75,7 +77,9 @@ async def test_tools_over_mcp_and_openapi_contract():
 
 async def test_cli_stdio_startup_from_another_directory(tmp_path):
     env_file = tmp_path / ".env"
-    env_file.write_text("WEBMERCS_API_USERNAME=test\nWEBMERCS_API_PASSWORD=test\n")
+    env_file.write_text(
+        "WEBMERCS_API_USERNAME=test\nWEBMERCS_API_PASSWORD=test\nWEBMERCS_PROJECT_ID=42\n"
+    )
     parameters = StdioServerParameters(
         command=sys.executable,
         args=["-m", "webmercs_mcp", "--env-file", str(env_file)],
@@ -85,6 +89,6 @@ async def test_cli_stdio_startup_from_another_directory(tmp_path):
     async with stdio_client(parameters) as (read, write):
         async with ClientSession(read, write) as session:
             initialized = await session.initialize()
-            assert initialized.serverInfo.name == "Frendy Webmercs"
+            assert initialized.serverInfo.name == "Webmercs MCP"
             result = await session.list_tools()
-            assert len(result.tools) == 11
+            assert len(result.tools) == 12

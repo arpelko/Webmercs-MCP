@@ -1,4 +1,4 @@
-"""Local stdio MCP server with explicit, read-only tools."""
+"""Local stdio MCP server with server-enforced tool packages."""
 
 import argparse
 import sys
@@ -12,15 +12,19 @@ from mcp.types import ToolAnnotations
 
 from .client import WebmercsClient, WebmercsError
 from .config import Settings
+from .policy import PACKAGES
+from .write_tools import register_write_tools
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
 
 
 def create_server(client: WebmercsClient) -> FastMCP:
     mcp = FastMCP(
-        "Frendy Webmercs",
+        "Webmercs MCP",
         instructions=(
-            "Read-only access to Webmercs project 3 (Frendy). Lists return one page; "
+            "Access to the Webmercs project configured on the server. "
+            "Available tools are restricted by the active package. Writes default to previews. "
+            "Lists return one page; "
             "use offset/limit and total to retrieve more. Order searches default to the "
             "last 90 days: increase created_at_days for older orders. Monetary fields "
             "use the units documented by Webmercs; order prices are minor currency units "
@@ -28,13 +32,37 @@ def create_server(client: WebmercsClient) -> FastMCP:
         ),
     )
 
+    policy = client.settings.policy
+
+    def read_tool():
+        def register(function):
+            if function.__name__ in policy.enabled_tools:
+                return mcp.tool(annotations=READ_ONLY)(function)
+            return function
+
+        return register
+
+    if "list_tool_packages" in policy.enabled_tools:
+
+        @mcp.tool(annotations=READ_ONLY)
+        async def list_tool_packages() -> dict[str, Any]:
+            """Show available tool packages, active tools, exclusions and write execution gate."""
+            return {
+                "active_package": policy.package,
+                "writes_allowed": policy.allow_writes,
+                "disabled_tools": sorted(policy.disabled_tools),
+                "enabled_tools": sorted(policy.enabled_tools),
+                "packages": {name: sorted(tools) for name, tools in PACKAGES.items()},
+                "note": "Change environment settings and restart the server to switch packages.",
+            }
+
     async def get(resource: str, record_id: int | None = None, **filters: Any) -> dict[str, Any]:
         try:
             return await client.get(resource, record_id, **filters)
         except (WebmercsError, ValueError) as exc:
             raise ToolError(str(exc)) from None
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def list_orders(
         customer_id: int | None = None,
         user_id: int | None = None,
@@ -44,7 +72,7 @@ def create_server(client: WebmercsClient) -> FastMCP:
         offset: int = 0,
         limit: int = 20,
     ) -> dict[str, Any]:
-        """List Frendy orders with lines; defaults to the last 90 days. One page, limit 1–100.
+        """List orders with lines; defaults to the last 90 days. One page, limit 1–100.
 
         Status is the Webmercs status string, for example Ordered, Shipped or Canceled.
         pending_export_any filters orders pending export to at least one integration.
@@ -61,12 +89,12 @@ def create_server(client: WebmercsClient) -> FastMCP:
             limit=limit,
         )
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def get_order(order_id: int) -> dict[str, Any]:
         """Get an order by positive Webmercs order ID, including its order lines."""
         return await get("orders", order_id)
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def find_orders_by_serial_number(
         serial_number: str, created_at_days: int = 90, offset: int = 0, limit: int = 20
     ) -> dict[str, Any]:
@@ -84,7 +112,7 @@ def create_server(client: WebmercsClient) -> FastMCP:
             limit=limit,
         )
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def list_vendor_orders(
         vendor_id: int | None = None,
         status: str | None = None,
@@ -102,12 +130,12 @@ def create_server(client: WebmercsClient) -> FastMCP:
             limit=limit,
         )
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def get_vendor_order(vendor_order_id: int) -> dict[str, Any]:
         """Get a supplier order by its positive Webmercs vendor order ID."""
         return await get("vendororders", vendor_order_id)
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def search_products(
         search: str | None = None,
         brand_sku: str | None = None,
@@ -132,12 +160,12 @@ def create_server(client: WebmercsClient) -> FastMCP:
             limit=limit,
         )
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def get_product(product_id: int) -> dict[str, Any]:
         """Get a product by its positive Webmercs product ID."""
         return await get("products", product_id)
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def list_customers(
         customer_number: str | None = None,
         enabled: bool | None = None,
@@ -153,12 +181,12 @@ def create_server(client: WebmercsClient) -> FastMCP:
             limit=limit,
         )
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def get_customer(customer_id: int) -> dict[str, Any]:
         """Get a customer by its positive Webmercs customer ID."""
         return await get("customers", customer_id)
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def list_users(
         email: str | None = None,
         customer_id: int | None = None,
@@ -176,16 +204,17 @@ def create_server(client: WebmercsClient) -> FastMCP:
             limit=limit,
         )
 
-    @mcp.tool(annotations=READ_ONLY)
+    @read_tool()
     async def get_user(user_id: int) -> dict[str, Any]:
         """Get a user by its positive Webmercs user ID."""
         return await get("users", user_id)
 
+    register_write_tools(mcp, client)
     return mcp
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Frendy Webmercs MCP (read-only, stdio)")
+    parser = argparse.ArgumentParser(description="Webmercs MCP (tool packages, stdio)")
     parser.add_argument(
         "--env-file",
         type=Path,

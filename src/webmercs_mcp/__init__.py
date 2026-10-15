@@ -1,1 +1,1 @@
-"""Frendy Webmercs MCP server."""
+"""Webmercs Admin API MCP server."""

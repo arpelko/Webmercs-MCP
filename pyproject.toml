@@ -3,14 +3,16 @@ requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
-name = "frendy-webmercs-mcp"
+name = "webmercs-mcp"
 version = "0.1.0"
-description = "Read-only Webmercs Admin API MCP server for Frendy"
+description = "MCP server for the Webmercs Admin API with controlled read and write tools"
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.26,<2",
     "httpx>=0.28,<0.29",
     "python-dotenv>=1.1,<2",
+    "jsonschema>=4.20,<5",
+    "pydantic>=2.12,<3",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +23,9 @@ webmercs-mcp = "webmercs_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/webmercs_mcp"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"docs/admin-openapi.json" = "webmercs_mcp/admin-openapi.json"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
